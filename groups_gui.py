@@ -26,13 +26,14 @@ SLOT_LABELS = ['1 место', '2 место', '3 место', '4 место']
 class DraggableLabel(tk.Label):
     """Лейбл команды, который можно перетаскивать между контейнерами."""
 
-    def __init__(self, master, text, controller, **kwargs):
+    def __init__(self, master, text, controller, block=None, **kwargs):
         super().__init__(
             master, text=text, relief='raised', borderwidth=2,
             padx=8, pady=4, bg='#ffffff', cursor='hand2', **kwargs
         )
         self.team = text
         self.controller = controller  # GroupsTab — для доступа к общему состоянию
+        self.block = block  # GroupBlock, к которому принадлежит эта команда
         self._drag_data = {'x': 0, 'y': 0, 'item': None}
 
         self.bind('<ButtonPress-1>', self._on_press)
@@ -68,6 +69,14 @@ class DraggableLabel(tk.Label):
             self._floating.destroy()
             self._floating = None
         self.configure(bg='#ffffff')
+
+        dx = abs(event.x_root - self._drag_data['x'])
+        dy = abs(event.y_root - self._drag_data['y'])
+
+        if dx < 4 and dy < 4:
+            # Это клик, а не перетаскивание
+            self.controller.handle_click(self)
+            return
 
         # Определяем виджет под курсором
         widget = self.winfo_containing(event.x_root, event.y_root)
@@ -160,7 +169,7 @@ class GroupBlock(ttk.Frame):
         # так как Tk требует, чтобы 'in_' был master-ом или его потомком.
         self.labels: dict[str, DraggableLabel] = {}
         for team in teams:
-            lbl = DraggableLabel(self, team, controller)
+            lbl = DraggableLabel(self, team, controller, block=self)
             lbl.pack(in_=self.pool, pady=2, padx=4, fill='x')
             self.labels[team] = lbl
 
@@ -204,7 +213,10 @@ class GroupsTab(ttk.Frame):
 
         ttk.Label(
             top_bar,
-            text='Перетащите названия команд из левого списка в слоты с 1 по 4 место.',
+            text=('Перетащите команду в слот 1-4 место, либо просто кликните по ней '
+                  '(заполнит первый свободный слот по порядку).\n'
+                  'Клик по команде в слоте — вернуть в пул.'),
+            justify='left',
         ).pack(side='left')
 
         ttk.Button(top_bar, text='Сбросить всё', command=self.reset_all).pack(side='right')
@@ -259,6 +271,39 @@ class GroupsTab(ttk.Frame):
             if slot.team_label is label:
                 return slot
         return None
+
+    def handle_click(self, label: DraggableLabel):
+        """
+        Обрабатывает одиночный клик по команде (без перетаскивания):
+        - если команда в пуле -> ставим её в первый свободный слот по порядку
+          (1 место, 2 место, ...);
+        - если команда уже в слоте -> возвращаем её в пул.
+        """
+        block = label.block
+        if block is None:
+            return
+
+        current_slot = self._find_current_slot(block, label)
+
+        if current_slot is None:
+            # В пуле -> ищем первый свободный слот по порядку
+            for slot in block.slots:
+                if slot.team_label is None:
+                    label.pack_forget()
+                    slot.set_team(label)
+                    break
+            else:
+                # Все слоты заняты — ничего не делаем
+                return
+        else:
+            # В слоте -> возвращаем в пул
+            current_slot.clear()
+            label.pack_forget()
+            label.pack(in_=block.pool, pady=2, padx=4, fill='x')
+
+        self._update_status()
+        if self.on_change:
+            self.on_change()
 
     def handle_drop(self, label: DraggableLabel, target):
         """Обрабатывает перетаскивание лейбла команды в новый контейнер."""

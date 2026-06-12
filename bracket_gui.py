@@ -11,10 +11,11 @@ GUI вкладки сетки плейофф ЧМ-2026.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from bracket_logic import Bracket, BracketMatch
 from group_stage import Tournament
+from report import save_report
 
 
 ROUND_TITLES = {
@@ -75,6 +76,12 @@ class BracketTab(ttk.Frame):
 
         self.champion_label = ttk.Label(top_bar, text='', font=('TkDefaultFont', 11, 'bold'))
         self.champion_label.pack(side='left', padx=20)
+
+        self.save_report_btn = ttk.Button(
+            top_bar, text='Сохранить отчёт (HTML)',
+            command=self.save_report_dialog
+        )
+        self.save_report_btn.pack(side='right')
 
         # Прокручиваемая область с сеткой
         canvas_frame = ttk.Frame(self)
@@ -149,6 +156,44 @@ class BracketTab(ttk.Frame):
 
         self.bracket = Bracket(tournament)
         self._redraw()
+
+    # ------------------------------------------------------------------
+    def save_report_dialog(self):
+        """Открывает диалог сохранения и записывает HTML-отчёт."""
+        tournament: Tournament = self.tournament_provider()
+
+        if not tournament.all_complete():
+            messagebox.showwarning(
+                'Группы не заполнены',
+                'Не все матчи группового этапа имеют результат.\n'
+                'Заполните все результаты на вкладке групп, прежде чем сохранять отчёт.'
+            )
+            return
+
+        if self.bracket is None:
+            if not messagebox.askyesno(
+                'Сетка не сформирована',
+                'Сетка плейофф ещё не сформирована (нажмите "Сформировать сетку").\n'
+                'Сохранить отчёт только по группам, без сетки плейофф?'
+            ):
+                return
+
+        path = filedialog.asksaveasfilename(
+            title='Сохранить отчёт',
+            defaultextension='.html',
+            filetypes=[('HTML файлы', '*.html'), ('Все файлы', '*.*')],
+            initialfile='wc2026_report.html',
+        )
+        if not path:
+            return
+
+        try:
+            save_report(path, tournament, self.bracket)
+        except OSError as e:
+            messagebox.showerror('Ошибка сохранения', f'Не удалось сохранить файл:\n{e}')
+            return
+
+        messagebox.showinfo('Готово', f'Отчёт сохранён:\n{path}')
 
     # ------------------------------------------------------------------
     def _redraw(self):
