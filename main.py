@@ -2,19 +2,16 @@
 ЧМ-2026: Конструктор турнирной сетки.
 
 Главное окно приложения с двумя вкладками:
-- "Группы" — базовое распределение команд по местам 1-4 (drag-and-drop)
+- "Группы"        — распределение команд (базовый: drag-and-drop;
+                    расширенный: ввод счётов всех матчей round robin)
 - "Сетка плейофф" — интерактивная сетка 1/16 финала -> Финал
-
-Связь между вкладками: GroupsTab при каждом изменении вызывает on_change,
-BracketTab получает Tournament через tournament_provider, который строит
-его из текущей расстановки GroupsTab.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 from data import GROUPS
-from groups_gui import GroupsTab
+from groups_gui_extended import GroupsTab   # ← новый модуль с двумя режимами
 from bracket_gui import BracketTab
 
 
@@ -37,19 +34,12 @@ class App(tk.Tk):
 
         self.notebook = notebook
 
-    # ------------------------------------------------------------------
     def _on_groups_change(self):
-        """Вызывается при любом изменении расстановки на вкладке групп."""
-        # Пока ничего не делаем автоматически — пользователь сам нажмёт
-        # "Сформировать сетку" на вкладке плейофф, когда будет готов.
         pass
 
     def _get_tournament(self):
-        """Строит Tournament на основе текущей расстановки GroupsTab."""
         tournament = self.groups_tab.build_tournament()
         if tournament is None:
-            # Возвращаем пустой Tournament — BracketTab сам проверит
-            # all_complete() и покажет предупреждение.
             from group_stage import Tournament
             return Tournament(GROUPS)
         return tournament
