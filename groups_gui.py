@@ -1,5 +1,5 @@
 """
-GUI вкладки "Группы" — базовая версия.
+GUI вкладки "Группы" — базовая версия (улучшенный дизайн).
 
 Для каждой из 12 групп показываются 4 команды, которые можно перетащить
 мышью в 4 слота ("1 место" .. "4 место"). На основе итогового распределения
@@ -7,18 +7,41 @@ GUI вкладки "Группы" — базовая версия.
 ровно такую таблицу (1-е место - 9 очков, 2-е - 6, 3-е - 3, 4-е - 0,
 без голов), чтобы bracket_logic мог построить сетку плейофф.
 
-UI: вертикальный скроллируемый список из 12 групп. В каждой группе слева —
-"пул" нераспределённых команд (перетаскиваемые лейблы), справа — 4 слота
-с подписями "1 место".."4 место". Перетаскивание реализовано вручную через
-события <ButtonPress-1> / <B1-Motion> / <ButtonRelease-1> (без внешних
-библиотек).
+UI: сетка 3 колонки с вертикальной прокруткой.
 """
 
 import tkinter as tk
 from tkinter import ttk
 
 from group_stage import Tournament
+import pitch_theme
 
+# Цветовая палитра (полная версия)
+PALETTE = {
+    'bg_main':      '#1a1f2e',   # тёмный фон
+    'bg_card':      '#242938',   # карточка группы
+    'bg_header':    '#2d3349',   # заголовок карточки
+    'bg_slot':      '#1e2336',   # фон слота
+    'bg_pool':      '#1e2336',   # фон пула
+    'bg_match':     '#1e2336',   # фон строки матча
+    'bg_match_alt': '#212640',   # чередующийся фон
+    'bg_table':     '#1e2336',
+    'bg_rank1':     '#1a3a2a',   # 1–2 место
+    'bg_rank2':     '#1a3a2a',
+    'bg_rank3':     '#3a3010',   # 3-е место
+    'bg_rank4':     '#2a1a1a',   # 4-е место
+    'fg_main':      '#e8eaf0',
+    'fg_dim':       '#8892aa',
+    'fg_accent':    '#4fc3f7',   # голубой акцент
+    'fg_green':     '#69f0ae',
+    'fg_yellow':    '#ffd740',
+    'border':       '#363d56',
+    'entry_bg':     '#2d3349',
+    'entry_fg':     '#ffffff',
+    'entry_border': '#4fc3f7',
+    'slot_empty':   '#2a2f42',
+    'separator':    '#363d56',
+}
 
 SLOT_LABELS = ['1 место', '2 место', '3 место', '4 место']
 
@@ -28,32 +51,34 @@ class DraggableLabel(tk.Label):
 
     def __init__(self, master, text, controller, block=None, **kwargs):
         super().__init__(
-            master, text=text, relief='raised', borderwidth=2,
-            padx=8, pady=4, bg='#ffffff', cursor='hand2', **kwargs
+            master, text=text, relief='raised', borderwidth=1,
+            padx=8, pady=4, cursor='hand2',
+            bg=PALETTE['entry_bg'], fg=PALETTE['fg_main'],
+            font=('Segoe UI', 9),
+            **kwargs
         )
         self.team = text
-        self.controller = controller  # GroupsTab — для доступа к общему состоянию
-        self.block = block  # GroupBlock, к которому принадлежит эта команда
+        self.controller = controller
+        self.block = block
         self._drag_data = {'x': 0, 'y': 0, 'item': None}
 
         self.bind('<ButtonPress-1>', self._on_press)
         self.bind('<B1-Motion>', self._on_motion)
         self.bind('<ButtonRelease-1>', self._on_release)
 
-    # ------------------------------------------------------------------
     def _on_press(self, event):
         self._drag_data['x'] = event.x_root
         self._drag_data['y'] = event.y_root
         self.lift()
-        # Создаём "плавающую" копию, которая будет следовать за курсором
         self._floating = tk.Toplevel(self)
         self._floating.overrideredirect(True)
-        self._floating.attributes('-alpha', 0.85)
+        self._floating.attributes('-alpha', 0.9)
         lbl = tk.Label(self._floating, text=self.team, relief='raised',
-                        borderwidth=2, padx=8, pady=4, bg='#cde6ff')
+                        borderwidth=1, padx=8, pady=4, bg=PALETTE['fg_accent'],
+                        fg='white', font=('Segoe UI', 9, 'bold'))
         lbl.pack()
         self._update_floating_pos(event)
-        self.configure(bg='#dddddd')
+        self.configure(bg=PALETTE['border'])
 
     def _on_motion(self, event):
         if getattr(self, '_floating', None):
@@ -68,17 +93,15 @@ class DraggableLabel(tk.Label):
         if getattr(self, '_floating', None):
             self._floating.destroy()
             self._floating = None
-        self.configure(bg='#ffffff')
+        self.configure(bg=PALETTE['entry_bg'])
 
         dx = abs(event.x_root - self._drag_data['x'])
         dy = abs(event.y_root - self._drag_data['y'])
 
         if dx < 4 and dy < 4:
-            # Это клик, а не перетаскивание
             self.controller.handle_click(self)
             return
 
-        # Определяем виджет под курсором
         widget = self.winfo_containing(event.x_root, event.y_root)
         target = self._find_drop_target(widget)
         if target is not None:
@@ -86,7 +109,6 @@ class DraggableLabel(tk.Label):
 
     @staticmethod
     def _find_drop_target(widget):
-        """Поднимается по иерархии виджетов, ищет SlotFrame или PoolFrame."""
         w = widget
         while w is not None:
             if isinstance(w, (SlotFrame, PoolFrame)):
@@ -95,17 +117,22 @@ class DraggableLabel(tk.Label):
         return None
 
 
-class SlotFrame(ttk.Frame):
-    """Один слот ("1 место" и т.п.) — может содержать максимум одну команду."""
+class SlotFrame(tk.Frame):
+    """Один слот ("1 место" и т.п.)."""
 
     def __init__(self, master, group_name: str, slot_index: int, label_text: str, **kwargs):
-        super().__init__(master, relief='sunken', borderwidth=2, width=160, height=40, **kwargs)
+        super().__init__(master, bg=PALETTE['bg_slot'],
+                         relief='solid', borderwidth=1,
+                         highlightbackground=PALETTE['border'],
+                         width=180, height=40, **kwargs)
         self.group_name = group_name
-        self.slot_index = slot_index  # 0..3
-        self.team_label = None  # DraggableLabel внутри слота, либо None
+        self.slot_index = slot_index
+        self.team_label = None
 
-        self.placeholder = ttk.Label(self, text=label_text, foreground='gray')
-        self.placeholder.pack(expand=True)
+        self.placeholder = tk.Label(self, text=label_text, 
+                                      bg=PALETTE['bg_slot'], fg=PALETTE['fg_dim'],
+                                      font=('Segoe UI', 9, 'italic'))
+        self.placeholder.pack(expand=True, fill='both')
 
         self.pack_propagate(False)
 
@@ -122,51 +149,78 @@ class SlotFrame(ttk.Frame):
         if old is not None:
             old.pack_forget()
             self.team_label = None
-            self.placeholder.pack(expand=True)
+            self.placeholder.pack(expand=True, fill='both')
         return old
 
 
-class PoolFrame(ttk.Frame):
+class PoolFrame(tk.Frame):
     """Контейнер нераспределённых команд группы."""
 
     def __init__(self, master, group_name: str, **kwargs):
-        super().__init__(master, relief='groove', borderwidth=1, **kwargs)
+        super().__init__(master, bg=PALETTE['bg_pool'],
+                         relief='solid', borderwidth=1,
+                         highlightbackground=PALETTE['border'],
+                         **kwargs)
         self.group_name = group_name
 
 
-class GroupBlock(ttk.Frame):
-    """Визуальный блок одной группы: название + пул + 4 слота."""
+class GroupBlock(tk.Frame):
+    """Визуальный блок одной группы."""
 
     def __init__(self, master, group_name: str, teams: list[str], controller, **kwargs):
-        super().__init__(master, relief='ridge', borderwidth=1, padding=10, **kwargs)
+        super().__init__(master, bg=PALETTE['bg_card'],
+                         relief='solid', borderwidth=1,
+                         highlightbackground=PALETTE['border'],
+                         padx=10, pady=8, **kwargs)
         self.group_name = group_name
         self.controller = controller
 
-        title = ttk.Label(self, text=f'Группа {group_name}', font=('TkDefaultFont', 11, 'bold'))
-        title.grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 6))
+        # Заголовок
+        title = tk.Label(self, text=f'ГРУППА {group_name}',
+                         bg=PALETTE['bg_header'], fg=PALETTE['fg_accent'],
+                         font=('Segoe UI', 11, 'bold'), pady=5)
+        title.pack(fill='x', pady=(0, 8))
 
-        ttk.Label(self, text='Команды (перетащите вправо):').grid(row=1, column=0, sticky='w')
-        ttk.Label(self, text='Итоговые места:').grid(row=1, column=1, sticky='w', padx=(30, 0))
+        # Основной контент
+        content = tk.Frame(self, bg=PALETTE['bg_card'])
+        content.pack(fill='x')
 
-        self.pool = PoolFrame(self, group_name)
-        self.pool.grid(row=2, column=0, sticky='nw', padx=(0, 30), pady=4)
+        # Пул команд (слева)
+        pool_frame = tk.Frame(content, bg=PALETTE['bg_card'])
+        pool_frame.pack(side='left', fill='x', expand=True)
 
-        slots_frame = ttk.Frame(self)
-        slots_frame.grid(row=2, column=1, sticky='nw')
+        tk.Label(pool_frame, text='Команды (перетащите):',
+                 bg=PALETTE['bg_card'], fg=PALETTE['fg_dim'],
+                 font=('Segoe UI', 8)).pack(anchor='w', pady=(0, 4))
+
+        self.pool = PoolFrame(pool_frame, group_name)
+        self.pool.pack(fill='x', pady=(0, 5))
+
+        # Слоты мест (справа)
+        slots_frame = tk.Frame(content, bg=PALETTE['bg_card'])
+        slots_frame.pack(side='right', padx=(20, 0))
+
+        tk.Label(slots_frame, text='Итоговые места:',
+                 bg=PALETTE['bg_card'], fg=PALETTE['fg_dim'],
+                 font=('Segoe UI', 8)).pack(anchor='w', pady=(0, 4))
 
         self.slots: list[SlotFrame] = []
+        colors = [PALETTE['fg_green'], PALETTE['fg_green'], 
+                  PALETTE['fg_yellow'], PALETTE['fg_dim']]
+        
         for i, label_text in enumerate(SLOT_LABELS):
-            row_frame = ttk.Frame(slots_frame)
-            row_frame.pack(anchor='w', pady=2)
-            ttk.Label(row_frame, text=f'{label_text}:', width=10).pack(side='left')
-            slot = SlotFrame(row_frame, group_name, i, '(пусто)')
+            row = tk.Frame(slots_frame, bg=PALETTE['bg_card'])
+            row.pack(fill='x', pady=2)
+            
+            color = colors[i] if i < len(colors) else PALETTE['fg_dim']
+            tk.Label(row, text=label_text, width=12, anchor='w',
+                     bg=PALETTE['bg_card'], fg=color,
+                     font=('Segoe UI', 9, 'bold')).pack(side='left')
+            
+            slot = SlotFrame(row, group_name, i, '(пусто)')
             slot.pack(side='left')
             self.slots.append(slot)
 
-        # Изначально все команды в пуле.
-        # ВАЖНО: master лейблов — сам GroupBlock (общий предок пула и слотов),
-        # а не PoolFrame, иначе pack(in_=SlotFrame) упадёт с TclError,
-        # так как Tk требует, чтобы 'in_' был master-ом или его потомком.
         self.labels: dict[str, DraggableLabel] = {}
         for team in teams:
             lbl = DraggableLabel(self, team, controller, block=self)
@@ -174,7 +228,6 @@ class GroupBlock(ttk.Frame):
             self.labels[team] = lbl
 
     def get_standings(self) -> list[str] | None:
-        """Возвращает список команд по местам [1,2,3,4] или None, если не все слоты заполнены."""
         teams = []
         for slot in self.slots:
             if slot.team_label is None:
@@ -183,102 +236,132 @@ class GroupBlock(ttk.Frame):
         return teams
 
     def reset(self):
-        """Возвращает все команды обратно в пул."""
         for slot in self.slots:
             label = slot.clear()
             if label is not None:
                 label.pack(in_=self.pool, pady=2, padx=4, fill='x')
 
 
-class GroupsTab(ttk.Frame):
-    """Вкладка с 12 группами, прокручиваемая по вертикали."""
+class GroupsTab(tk.Frame):
+    """Вкладка с 12 группами в сетке 3 колонки."""
 
     def __init__(self, master, groups_data: dict[str, list[str]], on_change=None, *args, **kwargs):
-        """
-        groups_data: {group_name: [team1, team2, team3, team4]}
-        on_change: опциональный callback(), вызывается при любом изменении
-                   расстановки (для уведомления других частей приложения).
-        """
-        super().__init__(master, *args, **kwargs)
+        super().__init__(master, bg=PALETTE['bg_main'], *args, **kwargs)
         self.groups_data = groups_data
         self.on_change = on_change
         self.blocks: dict[str, GroupBlock] = {}
 
         self._build_ui()
 
-    # ------------------------------------------------------------------
     def _build_ui(self):
-        top_bar = ttk.Frame(self)
-        top_bar.pack(side='top', fill='x', padx=10, pady=8)
+        top_bar = tk.Frame(self, bg=PALETTE['bg_header'], pady=6)
+        top_bar.pack(side='top', fill='x')
 
-        ttk.Label(
-            top_bar,
-            text=('Перетащите команду в слот 1-4 место, либо просто кликните по ней '
-                  '(заполнит первый свободный слот по порядку).\n'
-                  'Клик по команде в слоте — вернуть в пул.'),
-            justify='left',
-        ).pack(side='left')
+        tk.Label(top_bar, text='  ЧМ 2026  •  Базовый режим (расстановка по местам)',
+                 bg=PALETTE['bg_header'], fg=PALETTE['fg_accent'],
+                 font=('Segoe UI', 10, 'bold')).pack(side='left')
 
-        ttk.Button(top_bar, text='Сбросить всё', command=self.reset_all).pack(side='right')
-        self.status_label = ttk.Label(top_bar, text='')
+        info_text = ('Перетащите команду в слот (1-4 место) или кликните по ней → '
+                     'первый свободный слот. Клик по команде в слоте → вернуть в пул.')
+        tk.Label(top_bar, text=info_text, bg=PALETTE['bg_header'],
+                 fg=PALETTE['fg_dim'], font=('Segoe UI', 9)).pack(side='left', padx=20)
+
+        reset_btn = tk.Button(top_bar, text='↺ Сбросить всё',
+                               bg=PALETTE['bg_card'], fg=PALETTE['fg_main'],
+                               relief='flat', font=('Segoe UI', 9), padx=10, pady=3,
+                               activebackground=PALETTE['border'],
+                               cursor='hand2', command=self.reset_all)
+        reset_btn.pack(side='right', padx=10)
+
+        self.status_label = tk.Label(top_bar, text='',
+                                      bg=PALETTE['bg_header'], fg=PALETTE['fg_green'],
+                                      font=('Segoe UI', 9, 'bold'))
         self.status_label.pack(side='right', padx=10)
 
-        canvas_frame = ttk.Frame(self)
-        canvas_frame.pack(side='top', fill='both', expand=True)
+        # Прокручиваемая область (фон — травяное поле)
+        cf = tk.Frame(self, bg=pitch_theme.GRASS_DARK)
+        cf.pack(fill='both', expand=True)
 
-        self.canvas = tk.Canvas(canvas_frame, borderwidth=0, highlightthickness=0)
-        v_scroll = ttk.Scrollbar(canvas_frame, orient='vertical', command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=v_scroll.set)
-
+        self.canvas = tk.Canvas(cf, bg=pitch_theme.GRASS_DARK,
+                                 highlightthickness=0, borderwidth=0)
+        vsb = ttk.Scrollbar(cf, orient='vertical', command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=vsb.set)
         self.canvas.pack(side='left', fill='both', expand=True)
-        v_scroll.pack(side='right', fill='y')
+        vsb.pack(side='right', fill='y')
 
-        self.inner_frame = ttk.Frame(self.canvas)
-        self.inner_frame_id = self.canvas.create_window((0, 0), window=self.inner_frame, anchor='nw')
-
-        self.inner_frame.bind('<Configure>', self._on_inner_configure)
+        self.inner = tk.Frame(self.canvas, bg=pitch_theme.GRASS_DARK)
+        self.inner_id = self.canvas.create_window((0, 0), window=self.inner, anchor='nw')
+        self.inner.bind('<Configure>', self._on_configure)
         self.canvas.bind('<Configure>', self._on_canvas_resize)
 
-        # Колёсико мыши
-        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel)       # Windows / macOS
-        self.canvas.bind_all('<Button-4>', self._on_mousewheel_linux)   # Linux up
-        self.canvas.bind_all('<Button-5>', self._on_mousewheel_linux)   # Linux down
+        # Скролл колёсиком.
+        # bind_all с add='+' и проверкой _mouse_over_tab — чтобы обработчики
+        # колеса разных вкладок (Группы / Группы расширенные / Сетка) не
+        # затирали друг друга и скроллилась только вкладка под курсором.
+        self._mouse_over_tab = False
+        self.bind('<Enter>', lambda e: setattr(self, '_mouse_over_tab', True))
+        self.bind('<Leave>', lambda e: setattr(self, '_mouse_over_tab', False))
 
-        for group_name, teams in self.groups_data.items():
-            block = GroupBlock(self.inner_frame, group_name, teams, self)
-            block.pack(fill='x', padx=10, pady=6)
+        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel, add='+')
+        self.canvas.bind_all('<Button-4>', self._on_mousewheel_linux, add='+')
+        self.canvas.bind_all('<Button-5>', self._on_mousewheel_linux, add='+')
+
+        # Группы в сетке 3 колонки, с декоративными полосами разметки поля:
+        # сверху — "ворота", в середине — центральный круг, снизу — "ворота".
+        items = list(self.groups_data.items())
+        col_count = 3
+        total_rows = (len(items) + col_count - 1) // col_count  # 4
+        mid_row = total_rows // 2  # 2
+
+        for c in range(col_count):
+            self.inner.grid_columnconfigure(c, weight=1)
+
+        pitch_theme.PitchBand(self.inner, kind='goal_top').grid(
+            row=0, column=0, columnspan=col_count, sticky='ew')
+
+        grid_row_offset = 1
+        for idx, (group_name, teams) in enumerate(items):
+            row, col = divmod(idx, col_count)
+            grid_row = row + grid_row_offset + (1 if row >= mid_row else 0)
+            if row == mid_row and idx % col_count == 0:
+                pitch_theme.PitchBand(self.inner, kind='center').grid(
+                    row=grid_row - 1, column=0, columnspan=col_count, sticky='ew')
+
+            block = GroupBlock(self.inner, group_name, teams, self)
+            block.grid(row=grid_row, column=col, padx=8, pady=6, sticky='nw')
             self.blocks[group_name] = block
+
+        last_row = (total_rows - 1) + grid_row_offset + (1 if (total_rows - 1) >= mid_row else 0)
+        pitch_theme.PitchBand(self.inner, kind='goal_bottom').grid(
+            row=last_row + 1, column=0, columnspan=col_count, sticky='ew')
 
         self._update_status()
 
-    def _on_inner_configure(self, event):
-        self.canvas.configure(scrollregion=self.canvas.bbox('all'))
+    def _on_configure(self, event):
+        pitch_theme.repaint(self.canvas, orientation='vertical')
 
     def _on_canvas_resize(self, event):
-        self.canvas.itemconfigure(self.inner_frame_id, width=event.width)
+        self.canvas.itemconfigure(self.inner_id, width=event.width)
+        pitch_theme.repaint(self.canvas, orientation='vertical')
 
     def _on_mousewheel(self, event):
+        if not self._mouse_over_tab:
+            return
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
 
     def _on_mousewheel_linux(self, event):
+        if not self._mouse_over_tab:
+            return
         delta = -1 if event.num == 4 else 1
         self.canvas.yview_scroll(delta, 'units')
 
-    # ------------------------------------------------------------------
-    def _find_current_slot(self, block: 'GroupBlock', label: DraggableLabel) -> 'SlotFrame | None':
-        """Возвращает SlotFrame, в котором сейчас находится label, либо None (если в пуле)."""
+    def _find_current_slot(self, block: GroupBlock, label: DraggableLabel) -> SlotFrame | None:
         for slot in block.slots:
             if slot.team_label is label:
                 return slot
         return None
 
     def handle_click(self, label: DraggableLabel):
-        """
-        Обрабатывает одиночный клик по команде (без перетаскивания):
-        - если команда в пуле -> ставим её в первый свободный слот по порядку
-          (1 место, 2 место, ...);
-        - если команда уже в слоте -> возвращаем её в пул.
-        """
         block = label.block
         if block is None:
             return
@@ -286,17 +369,12 @@ class GroupsTab(ttk.Frame):
         current_slot = self._find_current_slot(block, label)
 
         if current_slot is None:
-            # В пуле -> ищем первый свободный слот по порядку
             for slot in block.slots:
                 if slot.team_label is None:
                     label.pack_forget()
                     slot.set_team(label)
                     break
-            else:
-                # Все слоты заняты — ничего не делаем
-                return
         else:
-            # В слоте -> возвращаем в пул
             current_slot.clear()
             label.pack_forget()
             label.pack(in_=block.pool, pady=2, padx=4, fill='x')
@@ -306,7 +384,6 @@ class GroupsTab(ttk.Frame):
             self.on_change()
 
     def handle_drop(self, label: DraggableLabel, target):
-        """Обрабатывает перетаскивание лейбла команды в новый контейнер."""
         block = self.blocks.get(target.group_name)
         if block is None or label.team not in block.labels:
             return
@@ -315,33 +392,26 @@ class GroupsTab(ttk.Frame):
 
         if isinstance(target, SlotFrame):
             if target is current_slot:
-                # Перетащили на то же место — ничего не делаем
                 return
 
             if target.team_label is not None:
-                # Целевой слот занят другой командой — вытесняем её
                 displaced = target.clear()
                 if current_slot is not None:
-                    # В целевом слоте была команда, а перетаскиваемая команда
-                    # была в другом слоте -> меняем их местами
                     current_slot.clear()
                     current_slot.set_team(displaced)
                 else:
                     displaced.pack(in_=block.pool, pady=2, padx=4, fill='x')
 
-            # Освобождаем исходное место label
             if current_slot is not None:
                 current_slot.team_label = None
-                current_slot.placeholder.pack(expand=True)
+                current_slot.placeholder.pack(expand=True, fill='both')
 
             label.pack_forget()
             target.set_team(label)
 
         elif isinstance(target, PoolFrame):
             if current_slot is None:
-                # Уже в пуле — ничего делать не нужно
                 return
-
             current_slot.clear()
             label.pack_forget()
             label.pack(in_=target, pady=2, padx=4, fill='x')
@@ -350,7 +420,6 @@ class GroupsTab(ttk.Frame):
         if self.on_change:
             self.on_change()
 
-    # ------------------------------------------------------------------
     def reset_all(self):
         for block in self.blocks.values():
             block.reset()
@@ -361,30 +430,12 @@ class GroupsTab(ttk.Frame):
     def _update_status(self):
         complete = sum(1 for b in self.blocks.values() if b.get_standings() is not None)
         total = len(self.blocks)
-        self.status_label.configure(text=f'Распределено групп: {complete} / {total}')
+        self.status_label.configure(text=f'Готово групп: {complete} / {total}')
 
-    # ------------------------------------------------------------------
     def is_complete(self) -> bool:
         return all(b.get_standings() is not None for b in self.blocks.values())
 
     def build_tournament(self) -> Tournament | None:
-        """
-        Строит объект Tournament на основе выбранных мест.
-
-        Поскольку базовая версия не предполагает реальных счетов матчей,
-        генерируются "синтетические" результаты, которые гарантированно
-        дают команде на месте N очки/разницу голов, строго большие,
-        чем у команды на месте N+1 (9/6/3/0 очков соответственно),
-        чтобы итоговая таблица standings() совпадала с выбранным порядком.
-
-        Синтетические результаты кругового турнира для порядка [t1,t2,t3,t4]
-        (t1 - 1 место, ..., t4 - 4 место):
-          t1-t2: 1:0   t1-t3: 2:0   t1-t4: 3:0
-          t2-t3: 1:0   t2-t4: 2:0
-          t3-t4: 1:0
-        Итоговые очки: t1=9, t2=6, t3=3, t4=0 — порядок гарантирован
-        независимо от тай-брейков.
-        """
         if not self.is_complete():
             return None
 
@@ -403,19 +454,3 @@ class GroupsTab(ttk.Frame):
             g.set_result(t3, t4, 1, 0)
 
         return tournament
-
-
-if __name__ == '__main__':
-    from data import GROUPS
-
-    root = tk.Tk()
-    root.title('Тест: вкладка групп ЧМ-2026 (базовая версия)')
-    root.geometry('900x800')
-
-    def on_change():
-        print('Изменение расстановки')
-
-    tab = GroupsTab(root, GROUPS, on_change=on_change)
-    tab.pack(fill='both', expand=True)
-
-    root.mainloop()
