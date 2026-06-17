@@ -4,13 +4,15 @@ GUI вкладки "Группы (расширенные)" — ввод счёт
 """
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from pathlib import Path
 from itertools import combinations
+import threading
 
 from group_stage import Tournament, Group
 from groups_gui import PALETTE
 import pitch_theme
+import live_data
 
 _HERE = Path(__file__).parent
 FLAGS_DIR = _HERE / 'flags_png'
@@ -259,6 +261,37 @@ class GroupBlockExtended(tk.Frame):
             v1.set('0')
             v2.set('0')
 
+    def set_score(self, i: int, j: int, score1: int, score2: int):
+        """
+        Программно устанавливает счёт матча между командами с индексами
+        i и j (в порядке, использованном при создании группы), не вызывая
+        on_change на каждый отдельный вызов — используется при массовой
+        загрузке реальных результатов (см. apply_real_results).
+        """
+        key = (i, j) if (i, j) in self.score_vars else (j, i)
+        if key not in self.score_vars:
+            return
+        v1, v2 = self.score_vars[key]
+        if key == (i, j):
+            v1.set(str(score1))
+            v2.set(str(score2))
+        else:
+            v1.set(str(score2))
+            v2.set(str(score1))
+
+    def apply_real_results(self, results: dict) -> int:
+        """
+        Применяет словарь {(i, j): (score1, score2)} к этой группе.
+        Возвращает количество фактически изменённых матчей.
+        """
+        applied = 0
+        for (i, j), (s1, s2) in results.items():
+            self.set_score(i, j, s1, s2)
+            applied += 1
+        if applied:
+            self._update_table()
+        return applied
+
 
 class ExtendedGroupsTab(tk.Frame):
     """
@@ -292,6 +325,16 @@ class ExtendedGroupsTab(tk.Frame):
         self._ext_status = tk.Label(toolbar, text='', bg=PALETTE['bg_header'],
                                      fg=PALETTE['fg_dim'], font=('Segoe UI', 9))
         self._ext_status.pack(side='left', padx=12)
+
+        self._load_real_btn = tk.Button(
+            toolbar, text='⬇  Загрузить реальные результаты',
+            bg=PALETTE['btn_bg'] if 'btn_bg' in PALETTE else '#2979ff',
+            fg='white', relief='flat',
+            font=('Segoe UI', 9, 'bold'), padx=10, pady=3,
+            activebackground=PALETTE.get('btn_hover', '#448aff'),
+            cursor='hand2', command=self._load_real_results
+        )
+        self._load_real_btn.pack(side='right', padx=(0, 6))
 
         reset_btn = tk.Button(
             toolbar, text='↺  Сбросить всё',
@@ -442,6 +485,63 @@ class ExtendedGroupsTab(tk.Frame):
         for block in self._ext_blocks.values():
             block.reset()
         self._notify_change()
+
+    def _load_real_results(self):
+        """
+        Запускает загрузку реальных результатов группового этапа в фоновом
+        потоке (чтобы не подвешивать интерфейс на время сетевого запроса),
+        затем применяет их к соответствующим полям счёта в GUI-потоке.
+        """
+        self._load_real_btn.configure(state='disabled', text='⏳  Загрузка…')
+
+        def worker():
+            try:
+                results = live_data.get_real_results(self.groups_data)
+            except live_data.LiveDataError as e:
+                self.after(0, lambda: self._on_load_real_error(str(e)))
+                return
+            except Exception as e:  # неожиданная ошибка — не даём потоку умереть тихо
+                self.after(0, lambda: self._on_load_real_error(f'Непредвиденная ошибка: {e}'))
+                return
+            self.after(0, lambda: self._on_load_real_success(results))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_load_real_success(self, results: dict):
+        self._load_real_btn.configure(state='normal', text='⬇  Загрузить реальные результаты')
+
+        total_applied = 0
+        groups_touched = 0
+        for group_name, matches in results.items():
+            if not matches:
+                continue
+            block = self._ext_blocks.get(group_name)
+            if block is None:
+                continue
+            applied = block.apply_real_results(matches)
+            if applied:
+                total_applied += applied
+                groups_touched += 1
+
+        self._notify_change()
+
+        if total_applied == 0:
+            messagebox.showinfo(
+                'Реальные результаты',
+                'На данный момент источник не сообщает результатов ни по одному '
+                'сыгранному матчу группового этапа (возможно, матчи ещё не начались, '
+                'либо источник обновляется с задержкой).'
+            )
+        else:
+            messagebox.showinfo(
+                'Реальные результаты загружены',
+                f'Обновлено {total_applied} матч(ей) в {groups_touched} групп(ах).\n'
+                'Поля, по которым у источника пока нет данных, не изменены.'
+            )
+
+    def _on_load_real_error(self, message: str):
+        self._load_real_btn.configure(state='normal', text='⬇  Загрузить реальные результаты')
+        messagebox.showerror('Не удалось загрузить результаты', message)
 
     def is_complete(self) -> bool:
         return all(b.is_complete() for b in self._ext_blocks.values())
